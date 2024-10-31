@@ -1,0 +1,298 @@
+---
+title: "NS_Assignment"
+author: "Y. Oude Heuvel"
+date: '2022-06-16'
+output:
+  word_document: default
+  html_document: default
+---
+
+libraries
+```{r}
+library(tidyverse)
+library(rstanarm)
+options(mc.cores = 4)
+library(bayr)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#data as provided by the instructor
+data 
+```{r}
+your_student_number <- 1595989 ## <- Enter your student number
+set.seed(your_student_number)
+
+n_Parts <- 40
+n_Faces <- 60
+n_Obs <- n_Parts * n_Faces
+
+Parts <- 
+  tibble(Part = c(1:n_Parts),
+         lv_relig = rbinom(n_Parts, 1, 0.1),
+         beta_0_P = rnorm(n_Parts, 0, 0.1), ## <-- ape, ape
+         beta_1_P = rnorm(n_Parts, 0, 0.1), ## <-- + human eyes 
+         beta_2_P = rnorm(n_Parts, 0, 0.1), ## <-- + human skull
+         beta_3_P = rnorm(n_Parts, 0, 0.1)) ## <-- + when both %>% 
+
+Faces <- tibble(Face = as.factor(c(1:n_Faces)),
+                Skull = sample(c("ape", "human"), n_Faces, 
+                               replace = T),
+                Sclera =  sample(c("ape", "human"), n_Faces, 
+                                 replace = T),
+                beta_0_F = rnorm(n_Faces, 0, 0.1), ## <-- ape, ape
+                beta_1_F = rnorm(n_Faces, 0, 0.1), 
+                beta_2_F = rnorm(n_Faces, 0, 0.1),
+                beta_3_F = rnorm(n_Faces, 0, 0.1))
+                
+
+Exp_pred <- 
+  expand.grid(Part = Parts$Part, 
+              Face = Faces$Face) %>% 
+  mutate(beta_0_nfix = 3,
+         beta_1_nfix = 0.1,
+         beta_2_nfix = 0.1,
+         beta_3_nfix = -0.5,
+         beta_0_time = 6,
+         beta_1_time = -0.3,
+         beta_2_time = -0.3,
+         beta_3_time = 1,
+         beta_4_time = -3, # lv_relig
+         olre_time = rnorm(n_Obs, 0, 0.1),
+         olre_nfix = rnorm(n_Obs, 0, 0)) %>% 
+  left_join(Parts, by = "Part") %>% 
+  left_join(Faces, by = "Face") %>% 
+  mutate(Obs = 1:n_Obs)
+
+Exp <-
+  Exp_pred %>% 
+  mutate(human_sclera = Sclera == "human",
+         human_skull = Skull == "human") %>% 
+  mutate(eta_nfix = beta_0_nfix + beta_0_P + beta_0_F +
+                    human_sclera * (beta_1_nfix + beta_1_P + beta_1_F) +
+                    human_skull  * (beta_2_nfix + beta_2_P + beta_2_F) +
+                    human_skull  * human_sclera  * (beta_3_nfix + beta_3_P + beta_3_F) +
+                    olre_nfix) %>%
+  mutate(eta_time = beta_0_time + beta_0_P + beta_0_F +
+                    human_sclera * (beta_1_time + beta_1_P + beta_1_F) +
+                    human_skull  * (beta_2_time + beta_2_P + beta_2_F) +
+                    human_skull  * human_sclera  * (beta_3_time + beta_3_P + beta_3_F) +
+                    human_skull  * !human_sclera * lv_relig * beta_4_time +
+                    olre_time) %>% 
+  mutate(nfix = rpois(n_Obs, exp(eta_nfix)),
+         time = rexp(n_Obs, exp(-eta_time))) %>% 
+  select(Obs, Part, Face, Sclera, Skull, nfix, time) %>% 
+  bayr::as_tbl_obs()
+
+Exp
+```
+
+
+
+
+
+# Introduction
+
+
+Category confusion and religious fear are two theories that can explain the uncanny valley effect. An experiment was conducted to test both of these theories. Participants viewed different faces, with different combinations of either human-like or ape-like eyes and skulls, while wearing an eye-tracker. The expectation for the category confusion theory is that participants will glance at faces more often but for a shorter time when they view faces where the eyes and skull do not match (ape-like eyes and human-like skull or human-like eyes and ape-like skull) when compared to faces where the eyes and skull do match. The expectation for the religious fear theory is that some people are affected by religious fear, and those people will glance at faces less often and for a shorter time when they have the combination of ape-like eyes and human-like skulls when compared to people that are not affected by it. 
+
+To test the category confusion theory I am interested in the difference in number of fixations and dwell time of people that viewed faces with a matching sclera and skull and people that viewed faces with a mismatching sclera and skull. 
+To test the religious fear theory I am interested in differences between participants in number of fixations and dwell time when they viewed the ape/human combination. 
+
+
+## Hypotheses
+
+
+To assess the expectations that derive from these theories I have formulated the following hypotheses:
+
+hypotheses for category confusion:
+
+***H1: if sclera and skull are incongruent, the number of fixations will be higher than if sclera and skull are congruent***
+
+***H2: if sclera and skull are incongruent, dwell time will be lower than if sclera and skull are congruent***
+
+hypotheses for religious fear:
+
+***H3: if sclera is ape and skull is human, there is a group of people that have a lower number of fixations compared to the others***
+
+***H4: if sclera is ape and skull is human, there is a group of people for which dwell time is lower compared to the others***
+
+
+# Methods
+
+
+I will make two statistical models to test my hypotheses. One model to predict the number of fixations and one to predict dwell time. For both model 1 and model 2 the predictors will be the skull and sclera of the viewed faces, which I combined into the Sclera_Skull variable (as I am interested in the combination of the two and not in them seperately). I will include participant random effects as a predictor in both models, as it will be important to compare participants to test H3 and H4. Using these models, I will test H1 and H2 by finding the model coefficients (95% CI) of all four sclera/skull combinations for both models, visualizing them with a crossbar plot, and comparing those. Using a crossbar plot will allow me to not only visualize how far apart the center values are, but also how far apart the 95% CI's are, which will give some insight into the probability of a difference occurring in a random person. I will test H3 and H4 by comparing fitted values of the participants for both models. First I will compare the standard deviations. Then I will plot the fitted values for each face for all participants (every participant looked at sixty faces) in a spaghetti plot. By using this type of plot I will be able to see how individual participant scores compare to each other and to the population mean score. This is important because if H3 and H4 are true, I would expect to be able to see some participants behaving differently from the norm.
+
+*making the Sclera_Skull variable*
+```{r}
+Exp <- Exp %>%
+  mutate(Sclera_Skull = str_c(Sclera, Skull, sep = "_"))
+
+```
+
+
+# Results 
+
+
+*making the models for number of fixations and dwell time*
+```{r}
+M_1 <-
+  Exp %>%
+  stan_glmer(nfix ~ 0 + Sclera_Skull + (0 + Sclera_Skull | Part),
+            data = .)
+
+M_2 <-
+  Exp %>%
+  stan_glmer(time ~ 0 + Sclera_Skull + (0 + Sclera_Skull | Part),
+            data = .)
+```
+
+
+*coefficient table for number of fixations*
+```{r}
+
+fixef(M_1)
+
+```
+
+*crossbar plot for number of fixations*
+```{r}
+
+aes_1 <- aes(x = fixef,
+             y = center,
+             ymin = lower,
+             ymax = upper)
+
+fixef(M_1) %>% 
+  ggplot(aes_1) +
+  geom_crossbar() 
+
+```
+
+*coefficient table for dwell time*
+```{r}
+
+fixef(M_2)
+
+```
+
+*crossbar plot for dwell time*
+```{r}
+
+fixef(M_2) %>% 
+  ggplot(aes_1) +
+  geom_crossbar() 
+
+```
+
+
+The number of fixations is clearly much higher for an incongruent sclera and skull when compared to a human sclera and human skull. The number of fixations is also slightly higher for an incongruent sclera and skull when compared to an ape sclera and skull.
+Furthermore, neither CI for the incongruent conditions overlaps with the CI for the human_human condition, and only the CI for the human_ape condition overlaps slightly with the CI for the ape_ape condition.
+
+The dwell time is much lower for an incongruent sclera and skull when compared to a human sclera and human skull, and moderately lower when compared to an ape sclera and skull.
+Furthermore neither CI for for the incongruent conditions overlaps with the CI's for the congruent conditions.
+
+
+*making a data frame with the fitted values of both models using the predict function, and those values to the original data set*
+```{r}
+T_fit_M_1 <-
+  predict(M_1)
+
+T_fit_M_2 <-
+  predict(M_2)
+
+Exp <-
+  Exp %>% 
+  mutate(pred_nfix_M_1 = T_fit_M_1$center,
+         pred_time_M_2 = T_fit_M_2$center)
+
+```
+
+
+*descriptive statistics table for number of fixations*
+```{r}
+Exp%>%
+  group_by(Sclera_Skull) %>%
+  summarize(
+    mean = mean(pred_nfix_M_1),
+    sd = sd(pred_nfix_M_1)
+  )
+```
+
+
+*descriptive table for dwell time*
+```{r}
+Exp%>%
+  group_by(Sclera_Skull) %>%
+  summarize(
+    mean = mean(pred_time_M_2),
+    sd = sd(pred_time_M_2)
+  )
+```
+
+
+For number of fixations, the SD for the ape_human condition for number of fixations is moderately higher than the rest, while the SD for the ape_ape condition is moderately lower than the rest
+For dwell time, only the SD for the human_human condition is much higher than the rest.
+
+*Spaghetti plot showing participant scores compared to the population mean score for number of fixations*
+```{r}
+Exp%>%
+  ggplot(aes(
+    x = Face,
+    y = pred_nfix_M_1,
+    group = Part
+  )) +
+  geom_smooth(aes(color = "participant"),
+              size = 1, se = F
+              ) +
+  geom_smooth(aes(group = 1, color = "population"),
+              size = 1, se = F,
+              ) +
+  labs(color = "Level of Effect") +
+  facet_grid(
+    ~Sclera_Skull
+  ) 
+
+  
+```
+
+*Spaghetti plot showing participant scores compared to the population mean score for dwell time*
+```{r}
+Exp%>%
+  ggplot(aes(
+    x = Face,
+    y = pred_time_M_2,
+    group = Part
+  )) +
+  geom_smooth(aes(color = "participant"),
+              size = 1, se = F
+              ) +
+  geom_smooth(aes(group = 1, color = "population"),
+              size = 1, se = F,
+              ) +
+  labs(color = "Level of Effect") +
+  facet_grid(
+    ~Sclera_Skull
+  ) 
+
+  
+```
+
+Participants seem to vary in their number of fixations for all four conditions. The ape_human condition seems to have a little more variance compare to the rest. For all four conditions the variance seems to be uniformly distributed and there do not seem to be any discernible groups within any of the four conditions. Participants seem to vary less in their dwell time. However, for the human_human condition there seems to be a moderate amount of variance (a lot more than the other conditions).
+
+
+
+# Conclusion
+
+
+From these results I can say with 95% certainty that when looking at a face with mismatching eyes and skull, number of fixations will be higher when compared to a face with human-like eyes and a human-like skull, and with almost 95% certainty that this will happen when compared to a face with ape-like eyes and an ape-like skull. I can also say with 95% certainty that when looking at a face with mismatching eyes and skull, dwell time will be lower when compared to a face with matching eyes and skull. 
+Thus I can confidently state that a large majority of people will have a higher number of fixations and lower dwell time when looking at a face with mismatching eyes and skull when compared to one with matching eyes and skull. Therefore H1 and H2 are supported. 
+
+Furthermore I can say that there is a lot more variability in the number of fixations people make when looking at a face with ape-like eyes and a human-like skull when compared to the other combination. With that being said, when looking at the plots of the scores it does not seem as though this variability is caused by a specific group whose number of fixations tends to trend differently. If this were the case two groups of number of fixation scores would be discernable, one for participants affected by religious fear (low nfix) and one for participants unaffected by religious fear. Instead, the participant scores seem to be distributed relatively uniformly. therefore H3 is rejected.
+
+Finally, variability in the amount of dwell time is not higher for the ape_human condition when compared to the other conditions. In line with this, there are no clear groups that can be found in the plots of the scores. Interestingly, there is a lot more variability within the human_human condition when compared to the other, although it is not clear what is causing this. In any case, H4 is also rejected. 
+
+In conclusion, the data analyzed in this report seems to provide a lot of evidence in support of the category confusion theory, and not enough evidence in support of the religious fear theory. 
+
+
+
+
